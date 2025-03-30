@@ -56,6 +56,16 @@ var storage = &ReportedData{
 	RobotStatus: make(map[uint32]Status),
 }
 
+func (rd *ReportedData) AddEvent(event Event) {
+	rd.mu.Lock()
+	defer rd.mu.Unlock()
+
+	rd.Events = append(rd.Events, event)
+	if len(rd.Events) > 200 {
+		rd.Events = rd.Events[len(rd.Events)-200:] // 保留最新的200条
+	}
+}
+
 func main() {
 	// 机器人上报接口
 	http.HandleFunc("/robot/event", handleRobotEvent)
@@ -202,14 +212,12 @@ func handleRobotEvent(w http.ResponseWriter, r *http.Request) {
 		Timestamp: time.Now().UTC(),
 	}
 
-	storage.mu.Lock()
-	storage.Events = append(storage.Events, Event{
+	storage.AddEvent(Event{
 		RobotID:   request.RobotID,
 		RobotName: request.RobotName,
 		Message:   request.Message,
 		Timestamp: time.Now().UTC(),
 	})
-	storage.mu.Unlock()
 
 	go broadcastEvent(event) // 触发广播
 	w.WriteHeader(http.StatusCreated)
