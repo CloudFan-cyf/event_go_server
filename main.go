@@ -32,9 +32,44 @@ var (
 
 // 定义数据结构存储上报信息
 type ReportedData struct {
-	Events      []Event           `json:"events"`
+	Events      *RingBuffer       `json:"events"`
 	RobotStatus map[uint32]Status `json:"status"`
 	mu          sync.RWMutex
+}
+
+// RingBuffer is a fixed-size circular buffer for storing events.
+type RingBuffer struct {
+	buffer []Event
+	size   int
+	start  int
+	count  int
+}
+
+// NewRingBuffer creates a new RingBuffer with the given size.
+func NewRingBuffer(size int) *RingBuffer {
+	return &RingBuffer{
+		buffer: make([]Event, size),
+		size:   size,
+	}
+}
+
+// Add adds an event to the ring buffer.
+func (rb *RingBuffer) Add(event Event) {
+	rb.buffer[(rb.start+rb.count)%rb.size] = event
+	if rb.count < rb.size {
+		rb.count++
+	} else {
+		rb.start = (rb.start + 1) % rb.size
+	}
+}
+
+// GetAll retrieves all events in the ring buffer in order.
+func (rb *RingBuffer) GetAll() []Event {
+	events := make([]Event, rb.count)
+	for i := range rb.count {
+		events[i] = rb.buffer[(rb.start+i)%rb.size]
+	}
+	return events
 }
 
 type Event struct {
@@ -52,7 +87,7 @@ type Status struct {
 }
 
 var storage = &ReportedData{
-	Events:      make([]Event, 0),
+	Events:      NewRingBuffer(100), // 设置环形缓冲区大小为100
 	RobotStatus: make(map[uint32]Status),
 }
 
@@ -60,10 +95,7 @@ func (rd *ReportedData) AddEvent(event Event) {
 	rd.mu.Lock()
 	defer rd.mu.Unlock()
 
-	rd.Events = append(rd.Events, event)
-	if len(rd.Events) > 200 {
-		rd.Events = rd.Events[len(rd.Events)-200:] // 保留最新的200条
-	}
+	rd.Events.Add(event)
 }
 
 func main() {
@@ -111,7 +143,13 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// 发送初始数据
 	storage.mu.RLock()
-	initialData, _ := json.Marshal(storage)
+	initialData, _ := json.Marshal(struct {
+		Events      []Event           `json:"events"`
+		RobotStatus map[uint32]Status `json:"status"`
+	}{
+		Events:      storage.Events.GetAll(),
+		RobotStatus: storage.RobotStatus,
+	})
 	storage.mu.RUnlock()
 	client.send <- initialData
 
